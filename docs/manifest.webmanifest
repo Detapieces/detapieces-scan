@@ -1,0 +1,15 @@
+{
+  "name": "SCAN Detapieces",
+  "short_name": "SCAN DTP",
+  "start_url": "./#/scan",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0b3d6e",
+  "theme_color": "#0b3d6e",
+  "lang": "fr",
+  "icons": [
+    { "src": "icone.svg", "sizes": "any", "type": "image/svg+xml" },
+    { "src": "icone-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icone-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}

@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0b3d6e">
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="SCAN DTP">
+  <title>SCAN Detapieces</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icone.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icone-192.png">
+  <link rel="stylesheet" href="style.css">
+  <!-- Bibliothèques à version fixe -->
+  <script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js"></script>
+</head>
+<body>
+  <header id="entete">
+    <div class="marque">SCAN <span>Detapieces</span></div>
+    <div id="qui"></div>
+  </header>
+  <div id="messages" aria-live="polite"></div>
+  <main id="app"><p class="chargement">Chargement…</p></main>
+  <nav id="menu" hidden></nav>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

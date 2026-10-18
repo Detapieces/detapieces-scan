@@ -1,0 +1,8 @@
+# Projet SCAN Detapieces — sert seulement à déployer les fonctions scan-* (aucune autre fonction ici).
+project_id = "06_Scan"
+
+[functions.scan-comptes]
+verify_jwt = true
+
+[functions.scan-robot-veille]
+verify_jwt = true
