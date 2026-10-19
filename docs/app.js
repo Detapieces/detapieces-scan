@@ -4,6 +4,7 @@ import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js
 import { DOMAINE, SUPABASE_CLE_PUBLIQUE, SUPABASE_URL } from "./config.js";
 import { ACTIONS, actionsPossibles, ETATS_COMMERCIAUX as EC, ETATS_PHYSIQUES as EP, RE_ID_INTERNE, ROLES } from "./regles.js";
 import { pdfEmplacements, pdfPieces, pdfPlancheTest, zplEmplacement, zplPiece } from "./etiquettes.js";
+import { ouvrirPhotos } from "./photos.js";
 
 const sb = createClient(SUPABASE_URL, SUPABASE_CLE_PUBLIQUE, {
   auth: { persistSession: true, autoRefreshToken: true, storageKey: "scan-detapieces-session" },
@@ -335,7 +336,14 @@ function confirmer(action, p, emplacement) {
     });
     if (error) { message("erreur", erreurLisible(error), 7000); ev.target.disabled = false; return; }
     message("ok", `✔ ${EVENEMENTS[data.evenement] ?? data.evenement} : ${p.id_interne}`);
-    try { etat.piece = await lirePiece(p.id_interne); afficherFiche(etat.piece); } catch (e) { message("erreur", erreurLisible(e)); }
+    try { etat.piece = await lirePiece(p.id_interne); } catch (e) { message("erreur", erreurLisible(e)); }
+    const piece = etat.piece ?? p;
+    // Photos de préparation (comptes autorisés seulement ; sinon retour direct à la fiche, sans message)
+    if (action === "preparer_commande") {
+      return ouvrirPhotos({ sb, url: SUPABASE_URL, cle: SUPABASE_CLE_PUBLIQUE, piece, zone: $("#zone"), message, esc,
+                            appareil: appareil(), fin: () => afficherFiche(etat.piece ?? piece) });
+    }
+    afficherFiche(piece);
   };
 }
 
@@ -507,11 +515,12 @@ async function vueEtiquettes(app) {
 
 // ---------- comptes (responsable) ----------
 async function vueComptes(app) {
-  const [{ data: profils }, { data: journal }, { data: niveaux }, { data: empl }] = await Promise.all([
+  const [{ data: profils }, { data: journal }, { data: niveaux }, { data: empl }, { data: blanche, error: eBlanche }] = await Promise.all([
     sb.from("scan_profils").select("*").order("prenom"),
     sb.from("scan_journal_comptes").select("*").order("id", { ascending: false }).limit(30),
     sb.from("scan_test_config_niveaux").select("*").order("rang"),
     sb.from("scan_test_emplacements").select("code,actif,essai,niveau_rang").order("code"),
+    sb.from("photos_liste_blanche").select("*").order("id", { ascending: false }).limit(20),
   ]);
   const optRoles = (sel) => Object.entries(ROLES).map(([k, v]) => `<option value="${k}" ${k === sel ? "selected" : ""}>${esc(v)}</option>`).join("");
   app.innerHTML = `<h1>Gestion des comptes</h1>
@@ -541,6 +550,16 @@ async function vueComptes(app) {
     <div class="carte"><h2>Robot de scan (veille, simulation)</h2>
       <p class="doux">Lancement manuel : il lit les événements de scan et écrit seulement ce qu'il aurait fait. Aucun appel à eBay ni à Ovoko.</p>
       <button class="gros gris" id="robot">Lancer un tour du robot de scan</button></div>
+    <div class="carte"><h2>Photos de préparation — liste blanche</h2>
+      <p class="doux">Une commande en liste blanche reçoit UN envoi réel de photos, même robot en veille. L'autorisation est retirée
+        automatiquement après l'envoi (réussi ou non). Chaque ajout est tracé.</p>
+      ${eBlanche ? `<p class="bandeau info">Liste blanche indisponible (${esc(erreurLisible(eBlanche))}).</p>` : `
+      <form id="f-blanche" class="ligne"><input id="bo" placeholder="N° de commande eBay (ex. 25-15266-42494)" autocomplete="off">
+        <button class="gros" type="submit">Ajouter</button></form>
+      <table><tr><th>Commande</th><th>Ajoutée</th><th>Utilisée</th><th></th></tr>
+      ${(blanche ?? []).map((w) => `<tr><td><b>${esc(w.order_id)}</b></td><td>${dateFr(w.ajoute_le)}<br><small>${esc(w.ajoute_prenom)}</small></td>
+        <td>${w.utilise_le ? `${dateFr(w.utilise_le)}<br><small>${esc(w.resultat ?? "")}</small>` : "— (active)"}</td>
+        <td>${w.utilise_le ? "" : `<button class="petit" data-retirer="${w.id}">Retirer</button>`}</td></tr>`).join("")}</table>`}</div>
     <div class="carte"><h2>Journal des comptes</h2><table>
       ${(journal ?? []).map((j) => `<tr><td>${dateFr(j.cree_le)}</td><td>${esc(j.par_prenom)}</td><td>${esc(j.action)}</td><td>${esc(j.cible_prenom)} ${esc(j.detail ?? "")}</td></tr>`).join("")}</table></div>`;
 
@@ -587,6 +606,20 @@ async function vueComptes(app) {
     if (error) return message("erreur", erreurLisible(error), 7000);
     message("ok", "✔ Emplacement modifié (historique gardé)"); vueComptes(app);
   };
+  $("#f-blanche")?.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const n = $("#bo").value.trim();
+    if (!n || !confirm(`Autoriser UN envoi réel de photos pour la commande ${n} ?`)) return;
+    const { error } = await sb.rpc("photos_liste_blanche_ajouter", { p_order_id: n });
+    if (error) return message("erreur", erreurLisible(error), 7000);
+    message("ok", `✔ Commande ${n} en liste blanche (un envoi)`); vueComptes(app);
+  });
+  app.querySelectorAll("[data-retirer]").forEach((b) => (b.onclick = async () => {
+    if (!confirm("Retirer cette autorisation ?")) return;
+    const { error } = await sb.rpc("photos_liste_blanche_retirer", { p_id: Number(b.dataset.retirer) });
+    if (error) return message("erreur", erreurLisible(error), 7000);
+    message("ok", "✔ Autorisation retirée"); vueComptes(app);
+  }));
   $("#robot").onclick = async (ev) => {
     ev.target.disabled = true;
     try {

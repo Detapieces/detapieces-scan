@@ -73,3 +73,11 @@ th { color: var(--doux); font-weight: 700; }
 .doux { color: var(--doux); font-size: 15px; }
 .chargement { text-align: center; color: var(--doux); }
 pre.zpl { white-space: pre-wrap; font-size: 12px; max-height: 200px; overflow: auto; background: var(--fond); padding: 8px; border-radius: 8px; }
+/* Photos de préparation */
+.bandeau.alerte { background: #ffedd5; color: #7c2d12; }
+.vignettes { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; margin: 10px 0; }
+.vignette { margin: 0; border: 1px solid #d1d5db; border-radius: 10px; padding: 6px; background: #fff; }
+.vignette img { width: 100%; height: 120px; object-fit: cover; border-radius: 6px; display: block; }
+.vignette figcaption { font-size: 14px; margin: 4px 0; }
+label.case { display: flex; gap: 10px; align-items: center; font-weight: 600; margin-top: 10px; }
+label.case input { width: auto; transform: scale(1.4); }
