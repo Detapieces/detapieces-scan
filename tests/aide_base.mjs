@@ -32,6 +32,36 @@ create table public.veille_decisions (
   categorie text not null, motif text not null, constat text, deja_fait_hors_robot boolean not null default false, categorie_si_active text);
 create table public.veille_resumes (jour date primary key, texte text not null);
 alter table public.veille_decisions enable row level security; alter table public.veille_resumes enable row level security;
+-- 28/10 : structure (partielle) de la VRAIE table des pièces et des tables robots lues par le scan réel, avec les fonctions
+-- robots_* de production recopiées (robots_calculer_fiabilite réduite au seul cas « en_attente_annonce », testé en entier dans
+-- 04_Robots_Action/tests/attente_annonce_scan.test.ts). Droits comme en production : service_role seul.
+create table public.pieces (
+  id bigint generated always as identity primary key, id_interne text, lot text, id_ovoko text unique, canal text, statut_liaison text,
+  stock_partenaire text, source_import text, importe_le timestamptz not null default now(), maj_le timestamptz not null default now(),
+  id_interne_en_double boolean not null default false, type_piece text, cote text, vehicule text, liaison_id bigint unique,
+  id_interne_norme text, prix_ovoko numeric, code_additionnel_ovoko text, sku_ebay_fr text, interdit_ebay boolean, certitude text,
+  a_reparer boolean not null default false, motif_liaison text, incoherence_releve text, origine text, etat_fiabilite text,
+  motif_fiabilite text, fiabilite_le timestamptz, regle_identite text);
+create table public.annonces_ebay (item_id text primary key, site text, piece_id bigint, role text, rang_fr smallint, statut text, remplace_par text);
+create table public.ref_lots_stock (id bigint generated always as identity primary key, lot text, stock_arrivage text);
+alter table public.pieces enable row level security; alter table public.annonces_ebay enable row level security;
+alter table public.ref_lots_stock enable row level security;
+revoke all on public.pieces, public.annonces_ebay, public.ref_lots_stock from public, anon, authenticated;
+create function public.robots_id_norme(p text) returns text language sql immutable as
+  $$ select nullif(upper(regexp_replace(coalesce(p, ''), '[[:space:]-]', '', 'g')), '') $$;
+create function public.robots_id_valide(p text) returns boolean language sql immutable as
+  $$ select coalesce(public.robots_id_norme(p) ~ '^Y?[0-9]{7,13}$', false) $$;
+create function public.robots_lot_de(p text) returns text language sql immutable as
+  $$ select case when public.robots_id_valide(p) then left(public.robots_id_norme(p), length(public.robots_id_norme(p)) - 3) end $$;
+create function public.robots_lot_connu(p_lot text) returns boolean language sql stable as $$
+  select p_lot is not null and (exists (select 1 from public.pieces where public.robots_id_norme(lot) = public.robots_id_norme(p_lot))
+                                or exists (select 1 from public.ref_lots_stock where public.robots_id_norme(lot) = public.robots_id_norme(p_lot))) $$;
+create function public.robots_calculer_fiabilite(p_pieces bigint[] default null) returns jsonb language sql as $$
+  update public.pieces p set etat_fiabilite = 'en_attente_annonce', statut_liaison = 'en_attente_annonce'
+   where (p_pieces is null or p.id = any(p_pieces)) and p.origine = 'scan' and p.id_ovoko is null
+     and not exists (select 1 from public.annonces_ebay e where e.piece_id = p.id);
+  select '1'::jsonb $$;
+revoke execute on all functions in schema public from public, anon, authenticated;
 `;
 
 export async function nouvelleBase({ donnees = true, comptes = true } = {}) {

@@ -233,6 +233,153 @@ async function lirePiece(id) {
   return data;
 }
 
+// ---------- vraies pièces (table pieces) : présence confirmée et emplacement seulement ----------
+const PHYS_REEL = { presente_confirmee: "Présente confirmée au scan" };
+const COMM_REEL = { annonce_non_creee: "Annonce pas encore créée" };
+const ACTIONS_REEL = {
+  confirmer_presence: { libelle: "Confirmer la présence", couleur: "vert", rpc: "scan_reel_confirmer_presence" },
+  ranger: { libelle: "Ranger / changer d'emplacement", couleur: "bleu", emplacement: true, rpc: "scan_reel_ranger" },
+};
+const EVENEMENTS_REEL = { enregistrement: "Pièce enregistrée", confirmation_presence: "Présence confirmée",
+                          rangement: "Rangement", changement_emplacement: "Changement d'emplacement" };
+
+async function lireReel(code) {
+  const { data, error } = await sb.rpc("scan_reel_lire", { p_code: code });
+  if (error) throw error;
+  return data;
+}
+
+function htmlFicheReelle(p) {
+  const badges = [`<span class="badge info">Base réelle</span>`,
+    `<span class="badge phys">${esc(PHYS_REEL[p.etat_physique] ?? "Présence non confirmée")}</span>`];
+  if (p.etat_commercial) badges.push(`<span class="badge comm">${esc(COMM_REEL[p.etat_commercial] ?? p.etat_commercial)}</span>`);
+  if (p.etat_fiabilite === "en_attente_annonce") badges.push(`<span class="badge info">En attente d'annonce</span>`);
+  if (p.interdit_ebay) badges.push(`<span class="badge info">ℹ Ovoko uniquement</span>`);
+  return `
+    <div class="id">${esc(p.id_interne)}</div>
+    <div><b>${esc(p.type_piece || "Type non renseigné")}</b>${p.cote ? ` — ${esc(p.cote)}` : ""}</div>
+    <div class="badges">${badges.join("")}</div>
+    <dl class="grille">
+      <dt>Lot</dt><dd>${esc(p.lot || "—")}</dd>
+      <dt>Véhicule</dt><dd>${esc(p.vehicule || "—")}</dd>
+      <dt>Canal</dt><dd>${esc(p.canal || "—")}</dd>
+      <dt>ID Ovoko</dt><dd>${esc(p.id_ovoko || "—")}</dd>
+      <dt>eBay FR</dt><dd>${esc(p.ebay_fr || "—")}</dd>
+      <dt>Copies</dt><dd>${esc(p.copies || "—")}</dd>
+      <dt>Emplacement</dt><dd>${esc(p.emplacement || "—")}</dd>
+      ${p.confirme_le ? `<dt>Vue au scan</dt><dd>${dateFr(p.confirme_le)} (${esc(p.confirme_prenom ?? "")})</dd>` : ""}
+    </dl>`;
+}
+
+function afficherFicheReelle(r) {
+  etat.attente = null;
+  etat.piece = { reel: true, r };
+  consigne("Choisissez l'action");
+  if (r.trouve > 1) {
+    $("#zone").innerHTML = `<p class="bandeau erreur">ID interne porté par ${r.trouve} lignes (doublon) : aucune action possible au scan.</p>
+      ${r.pieces.map((p) => `<div class="carte">${htmlFicheReelle(p)}</div>`).join("")}
+      <button class="gros secondaire" id="autre">Scanner une autre pièce</button>`;
+  } else {
+    const p = r.pieces[0];
+    const role = etat.profil.role;
+    const actions = role === "equipe" || role === "responsable" ? Object.keys(ACTIONS_REEL) : [];
+    $("#zone").innerHTML = `
+      <div class="carte">${htmlFicheReelle(p)}</div>
+      ${actions.length ? actions.map((a) => `<button class="gros ${ACTIONS_REEL[a].couleur}" data-a="${a}">${esc(ACTIONS_REEL[a].libelle)}</button>`).join("")
+                       : `<p class="bandeau info">Aucune action possible pour votre rôle sur une pièce réelle.</p>`}
+      ${p.id_test ? `<button class="gros gris" id="fiche-test">Ouvrir la fiche de test (${esc(p.id_test)})</button>` : ""}
+      <button class="gros secondaire" id="autre">Scanner une autre pièce</button>`;
+    $("#zone").querySelectorAll("button[data-a]").forEach((b) => (b.onclick = () => choisirActionReelle(b.dataset.a, p)));
+    if (p.id_test) $("#fiche-test").onclick = async () => {
+      try { const t = await lirePiece(p.id_test); if (t) { etat.piece = t; afficherFiche(t); } } catch (e) { message("erreur", erreurLisible(e)); }
+    };
+  }
+  $("#autre").onclick = () => { etat.piece = null; $("#zone").innerHTML = ""; consigne("Scannez une pièce ou un emplacement"); ouvrirCamera(traiterCode); };
+}
+
+function choisirActionReelle(action, p) {
+  if (ACTIONS_REEL[action].emplacement) {
+    etat.attente = { reel: true, action, piece: p };
+    consigne(`${p.id_interne} → scannez maintenant l'EMPLACEMENT`, true);
+    $("#zone").innerHTML = `<div class="carte">${htmlFicheReelle(p)}</div>
+      <p class="bandeau info">Action : ${esc(ACTIONS_REEL[action].libelle)}. Scannez le QR de l'emplacement (ou tapez son code ci-dessus).</p>
+      <button class="gros secondaire" id="annuler">Annuler</button>`;
+    $("#annuler").onclick = () => afficherFicheReelle(etat.piece?.r ?? { trouve: 1, pieces: [p] });
+    ouvrirCamera(traiterCode);
+    return;
+  }
+  confirmerReel(action, p, null);
+}
+
+async function reafficherReel(id) {
+  try { const r = await lireReel(id); if (r?.trouve) return afficherFicheReelle(r); } catch (e) { message("erreur", erreurLisible(e)); }
+  etat.piece = null; $("#zone").innerHTML = "";
+}
+
+function confirmerReel(action, p, emplacement) {
+  etat.attente = null;
+  consigne("Confirmez", true);
+  $("#zone").innerHTML = `
+    <div class="carte">
+      <h2>Confirmer : ${esc(ACTIONS_REEL[action].libelle)}</h2>
+      <div class="id">${esc(p.id_interne)}</div><div>${esc(p.type_piece ?? "")}</div>
+      ${emplacement ? `<p>Emplacement : <b style="font-size:24px">${esc(emplacement)}</b></p>` : ""}
+      <label for="comm">Commentaire (facultatif)</label>
+      <textarea id="comm" rows="2"></textarea>
+    </div>
+    <button class="gros vert" id="oui">✔ CONFIRMER</button>
+    <button class="gros secondaire" id="non">✖ Annuler</button>`;
+  $("#non").onclick = () => reafficherReel(p.id_interne);
+  $("#oui").onclick = async (ev) => {
+    ev.target.disabled = true;
+    const args = { p_id_interne: p.id_interne, p_appareil: appareil(), p_commentaire: $("#comm").value || null };
+    if (ACTIONS_REEL[action].emplacement) args.p_emplacement = emplacement;
+    const { data, error } = await sb.rpc(ACTIONS_REEL[action].rpc, args);
+    if (error) { message("erreur", erreurLisible(error), 7000); ev.target.disabled = false; return; }
+    message("ok", `✔ ${EVENEMENTS_REEL[data.evenement] ?? data.evenement} : ${data.id_interne}${data.emplacement ? ` → ${data.emplacement}` : ""}`);
+    reafficherReel(data.id_interne);
+  };
+}
+
+// Pièce présente sur place mais absente de la base : enregistrement par le responsable (ID scanné + type)
+async function proposerEnregistrement(r, code) {
+  etat.piece = null;
+  consigne("Pièce absente de la base", true);
+  const refus = !r.lot_connu ? `Lot ${r.lot} inconnu (ni dans la base, ni dans le fichier de stock) : enregistrement impossible.`
+              : r.lot_partenaire ? `Lot ${r.lot} : stock partenaire ECO, pas notre stock — enregistrement impossible.` : null;
+  if (refus) {
+    $("#zone").innerHTML = `<p class="bandeau erreur">Pièce inconnue : ${esc(r.id_formate ?? code)}. ${esc(refus)}</p>`;
+    return;
+  }
+  const { data: types, error } = await sb.rpc("scan_reel_types");
+  if (error) return message("erreur", erreurLisible(error), 7000);
+  $("#zone").innerHTML = `
+    <div class="carte">
+      <h2>Pièce inconnue : ${esc(r.id_formate)}</h2>
+      <p>Lot <b>${esc(r.lot)}</b> connu. Cette pièce n'est pas dans la base.</p>
+      <p class="doux">Elle sera créée « présente confirmée au scan » et « annonce pas encore créée ». Véhicule, canal, prix,
+        ID Ovoko et emplacement restent vides (l'emplacement se scanne ensuite).</p>
+      <label for="type">Type de pièce</label>
+      <select id="type"><option value="">— choisir —</option>${(types ?? []).map((t) => `<option>${esc(t)}</option>`).join("")}</select>
+      <label for="comm">Commentaire (facultatif)</label>
+      <textarea id="comm" rows="2"></textarea>
+    </div>
+    <button class="gros vert" id="oui">✔ Enregistrer cette pièce</button>
+    <button class="gros secondaire" id="non">✖ Annuler</button>`;
+  $("#non").onclick = () => { $("#zone").innerHTML = ""; consigne("Scannez une pièce ou un emplacement"); };
+  $("#oui").onclick = async (ev) => {
+    const type = $("#type").value;
+    if (!type) return message("erreur", "Choisissez le type de pièce");
+    if (!confirm(`Enregistrer ${r.id_formate} — ${type} ?`)) return;
+    ev.target.disabled = true;
+    const { data, error: e } = await sb.rpc("scan_reel_enregistrer", { p_id_interne: r.id_formate, p_type_piece: type,
+                                                                       p_appareil: appareil(), p_commentaire: $("#comm").value || null });
+    if (e) { message("erreur", erreurLisible(e), 7000); ev.target.disabled = false; return; }
+    message("ok", `✔ Pièce enregistrée : ${data.id_interne}`);
+    reafficherReel(data.id_interne);
+  };
+}
+
 // ---------- scan ----------
 function vueScan(app) {
   etat.attente = null;
@@ -247,7 +394,8 @@ function vueScan(app) {
     <div id="zone"></div>`;
   $("#btn-camera").onclick = () => (etat.scanner ? fermerCamera() : ouvrirCamera(traiterCode));
   $("#f-saisie").onsubmit = (ev) => { ev.preventDefault(); const v = $("#code").value; $("#code").value = ""; traiterCode(v); };
-  if (etat.piece) afficherFiche(etat.piece);
+  if (etat.piece?.reel) afficherFicheReelle(etat.piece.r);
+  else if (etat.piece) afficherFiche(etat.piece);
 }
 
 function consigne(texte, attente = false) {
@@ -260,27 +408,37 @@ async function traiterCode(brut) {
   if (!code) return message("erreur", "Code vide");
   try {
     if (etat.attente) {
-      const { action, piece } = etat.attente;
-      return confirmer(action, piece, code.toUpperCase());
+      const { action, piece, reel } = etat.attente;
+      return reel ? confirmerReel(action, piece, code.toUpperCase()) : confirmer(action, piece, code.toUpperCase());
     }
+    // 1. vraie table des pièces (ID normalisé), 2. table de test, 3. emplacements
+    const r = await lireReel(code);
+    if (r?.trouve) return afficherFicheReelle(r);
     const p = await lirePiece(code);
     if (p) { etat.piece = p; return afficherFiche(p); }
     const { data: e, error } = await sb.from("scan_test_emplacements").select("id,code,actif,libelle").eq("code", code.toUpperCase()).maybeSingle();
     if (error) throw error;
     if (e) return afficherEmplacement(e);
-    message("erreur", RE_ID_INTERNE.test(code) ? `Pièce inconnue : ${code}` : `Code inconnu : ${code}`, 6000);
+    if (r?.id_valide && etat.profil.role === "responsable") return proposerEnregistrement(r, code);
+    message("erreur", r?.id_valide || RE_ID_INTERNE.test(code) ? `Pièce inconnue : ${code}` : `Code inconnu : ${code}`, 6000);
   } catch (err) { message("erreur", erreurLisible(err), 6000); }
 }
 
 async function afficherEmplacement(e) {
   etat.piece = null;
-  const { data, error } = await sb.from("scan_test_pieces_vue").select("id_interne,libelle,etat_physique").eq("emplacement_id", e.id).order("id_interne");
-  if (error) return message("erreur", erreurLisible(error));
+  const [{ data, error }, { data: reels, error: eReels }] = await Promise.all([
+    sb.from("scan_test_pieces_vue").select("id_interne,libelle,etat_physique").eq("emplacement_id", e.id).order("id_interne"),
+    sb.rpc("scan_reel_emplacement", { p_emplacement_id: e.id }),
+  ]);
+  if (error || eReels) return message("erreur", erreurLisible(error ?? eReels));
   consigne("Scannez une pièce ou un emplacement");
+  const lignes = [...(reels ?? []).map((p) => ({ id: p.id_interne, lib: p.type_piece, reel: true })),
+                  ...data.map((p) => ({ id: p.id_interne, lib: p.libelle, reel: false }))];
   $("#zone").innerHTML = `<div class="carte"><div class="id">📦 ${esc(e.code)}</div>
     ${e.actif ? "" : `<p class="bandeau erreur">Emplacement désactivé</p>`}
-    <p>${data.length} pièce(s) dans cet emplacement</p>
-    <table>${data.map((p) => `<tr class="cliquable" data-id="${esc(p.id_interne)}"><td><b>${esc(p.id_interne)}</b></td><td>${esc(p.libelle)}</td></tr>`).join("")}</table></div>`;
+    <p>${lignes.length} pièce(s) dans cet emplacement</p>
+    <table>${lignes.map((p) => `<tr class="cliquable" data-id="${esc(p.id)}"><td><b>${esc(p.id)}</b></td><td>${esc(p.lib)}</td>
+      <td><small>${p.reel ? "réelle" : "test"}</small></td></tr>`).join("")}</table></div>`;
   $("#zone").querySelectorAll("tr[data-id]").forEach((tr) => (tr.onclick = () => traiterCode(tr.dataset.id)));
 }
 
